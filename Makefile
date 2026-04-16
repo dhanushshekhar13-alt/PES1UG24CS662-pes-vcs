@@ -27,12 +27,7 @@ pes.o: pes.c pes.h tree.h index.h commit.h
 # Clean up
 clean:
 	rm -f pes *.o
-	rm -rf .pes	@echo "=== Running Phase 1 tests ==="
-	./test_objects
-	@echo ""
-	@echo "=== Running Phase 2 tests ==="
-	./test_tree
-
+	rm -rf .pes
+	
 test-integration: pes
-	@echo "=== Running integration tests ==="
-	bash test_sequence.sh
+	./test_sequence.sh

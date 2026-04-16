@@ -1,91 +1,44 @@
-// tree.c — Tree object serialization and construction
-//
-// PROVIDED functions: get_file_mode, tree_parse, tree_serialize
-// TODO functions:     tree_from_index
-//
-// Binary tree format (per entry, concatenated with no separators):
-//   "<mode-as-ascii-octal> <name>\0<32-byte-binary-hash>"
-//
-// Example single entry (conceptual):
-//   "100644 hello.txt\0" followed by 32 raw bytes of SHA-256
-
 #include "tree.h"
+#include "pes.h"
+#include "index.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/stat.h>
 
-// ─── Mode Constants ─────────────────────────────────────────────────────────
+// Forward declarations for functions in object.c
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
 
-#define MODE_FILE      0100644
-#define MODE_EXEC      0100755
-#define MODE_DIR       0040000
+// ─── HELPER ──────────────────────────────────────────────────────────────────
 
-// ─── PROVIDED ───────────────────────────────────────────────────────────────
-
-// Determine the object mode for a filesystem path.
-uint32_t get_file_mode(const char *path) {
-    struct stat st;
-    if (lstat(path, &st) != 0) return 0;
-
-    if (S_ISDIR(st.st_mode))  return MODE_DIR;
-    if (st.st_mode & S_IXUSR) return MODE_EXEC;
-    return MODE_FILE;
+// Comparison function to ensure alphabetical order by name.
+static int compare_tree_entries(const void *a, const void *b) {
+    const TreeEntry *ea = (const TreeEntry *)a;
+    const TreeEntry *eb = (const TreeEntry *)b;
+    return strcmp(ea->name, eb->name);
 }
 
-// Parse binary tree data into a Tree struct safely.
-// Returns 0 on success, -1 on parse error.
+// ─── PROVIDED FUNCTIONS ──────────────────────────────────────────────────────
+
 int tree_parse(const void *data, size_t len, Tree *tree_out) {
+    const uint8_t *p = (const uint8_t *)data;
+    const uint8_t *end = p + len;
     tree_out->count = 0;
-    const uint8_t *ptr = (const uint8_t *)data;
-    const uint8_t *end = ptr + len;
 
-    while (ptr < end && tree_out->count < MAX_TREE_ENTRIES) {
-        TreeEntry *entry = &tree_out->entries[tree_out->count];
-
-        // 1. Safely find the space character for the mode
-        const uint8_t *space = memchr(ptr, ' ', end - ptr);
-        if (!space) return -1; // Malformed data
-
-        // Parse mode into an isolated buffer
-        char mode_str[16] = {0};
-        size_t mode_len = space - ptr;
-        if (mode_len >= sizeof(mode_str)) return -1;
-        memcpy(mode_str, ptr, mode_len);
-        entry->mode = strtol(mode_str, NULL, 8);
-
-        ptr = space + 1; // Skip space
-
-        // 2. Safely find the null terminator for the name
-        const uint8_t *null_byte = memchr(ptr, '\0', end - ptr);
-        if (!null_byte) return -1; // Malformed data
-
-        size_t name_len = null_byte - ptr;
-        if (name_len >= sizeof(entry->name)) return -1;
-        memcpy(entry->name, ptr, name_len);
-        entry->name[name_len] = '\0'; // Ensure null-terminated
-
-        ptr = null_byte + 1; // Skip null byte
-
-        // 3. Read the 32-byte binary hash
-        if (ptr + HASH_SIZE > end) return -1; 
-        memcpy(entry->hash.hash, ptr, HASH_SIZE);
-        ptr += HASH_SIZE;
-
-        tree_out->count++;
+    while (p < end && tree_out->count < MAX_TREE_ENTRIES) {
+        TreeEntry *e = &tree_out->entries[tree_out->count++];
+        char type_name[16];
+        char hex[HASH_HEX_SIZE + 1];
+        int n;
+        // Format: "<mode> <type> <hash-hex> <name>\n"
+        if (sscanf((const char *)p, "%o %15s %64s %511[^\n]\n%n",
+                   &e->mode, type_name, hex, e->name, &n) != 4) return -1;
+        if (hex_to_hash(hex, &e->hash) != 0) return -1;
+        p += n;
     }
     return 0;
 }
 
-// Helper for qsort to ensure consistent tree hashing
-static int compare_tree_entries(const void *a, const void *b) {
-    return strcmp(((const TreeEntry *)a)->name, ((const TreeEntry *)b)->name);
-}
-
-// Serialize a Tree struct into binary format for storage.
-// Caller must free(*data_out).
-// Returns 0 on success, -1 on error.
 int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
     // We sort a temporary copy to ensure deterministic hashing.
     Tree sorted = *tree;
@@ -111,21 +64,8 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
     return 0;
 }
 
-// ─── TODO: Implement these ──────────────────────────────────────────────────
+// ─── TODO IMPLEMENTATION ─────────────────────────────────────────────────────
 
-// Build a tree hierarchy from the current index and write all tree
-// objects to the object store.
-//
-// HINTS - Useful functions and concepts for this phase:
-//   - index_load      : load the staged files into memory
-//   - strchr          : find the first '/' in a path to separate directories from files
-//   - strncmp         : compare prefixes to group files belonging to the same subdirectory
-//   - Recursion       : you will likely want to create a recursive helper function 
-//                       (e.g., `write_tree_level(entries, count, depth)`) to handle nested dirs.
-//   - tree_serialize  : convert your populated Tree struct into a binary buffer
-//   - object_write    : save that binary buffer to the store as OBJ_TREE
-//
-// Returns 0 on success, -1 on error.
 int tree_from_index(ObjectID *tree_id_out) {
     Index index;
     // Load staged files from the index.

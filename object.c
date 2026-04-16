@@ -94,9 +94,73 @@ int object_exists(const ObjectID *id) {
 //
 // Returns 0 on success, -1 on error.
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
+    int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
+    const char *type_str;
+    if (type == OBJ_BLOB) type_str = "blob";
+    else if (type == OBJ_TREE) type_str = "tree";
+    else if (type == OBJ_COMMIT) type_str = "commit";
+    else return -1;
+
+    // 1. Build the full object: header ("type size\0") + data
+    char header[64];
+    int header_len = sprintf(header, "%s %zu", type_str, len) + 1; // +1 for \0
+    size_t full_len = header_len + len;
+    uint8_t *full_obj = malloc(full_len);
+    if (!full_obj) return -1;
+
+    memcpy(full_obj, header, header_len);
+    memcpy(full_obj + header_len, data, len);
+
+    // 2. Compute SHA-256 hash of the FULL object
+    compute_hash(full_obj, full_len, id_out);
+
+    // 3. Check for deduplication
+    if (object_exists(id_out)) {
+        free(full_obj);
+        return 0;
+    }
+
+    // 4. Create shard directory (.pes/objects/XX/)
+    char path[512];
+    object_path(id_out, path, sizeof(path));
+    char dir_path[512];
+    strncpy(dir_path, path, 512);
+    char *last_slash = strrchr(dir_path, '/');
+    if (last_slash) *last_slash = '\0';
+    mkdir(dir_path, 0755);
+
+    // 5. Write to a temporary file
+    char temp_path[520];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    int fd = open(temp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(full_obj);
+        return -1;
+    }
+
+    if (write(fd, full_obj, full_len) != (ssize_t)full_len) {
+        close(fd);
+        free(full_obj);
+        return -1;
+    }
+
+    // 6. fsync() and rename()
+    fsync(fd);
+    close(fd);
+    free(full_obj);
+
+    if (rename(temp_path, path) != 0) return -1;
+
+    // 7. Sync shard directory to persist rename
+    int dfd = open(dir_path, O_RDONLY);
+    if (dfd >= 0) {
+        fsync(dfd);
+        close(dfd);
+    }
+
+    return 0;
+}
+    
 }
 
 // Read an object from the store.

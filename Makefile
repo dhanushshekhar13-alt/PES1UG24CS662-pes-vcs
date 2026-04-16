@@ -2,39 +2,32 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2
 LDFLAGS = -lcrypto
 
-# ─── Main binary ─────────────────────────────────────────────────────────────
+# Main targets
+all: pes
 
-SRCS = object.c tree.c index.c commit.c pes.c
-OBJS = $(SRCS:.c=.o)
+pes: object.o tree.o index.o commit.o pes.o
+	$(CC) -o pes $^ $(LDFLAGS)
 
-pes: $(OBJS)
-	$(CC) -o $@ $^ $(LDFLAGS)
+# Individual modules
+object.o: object.c pes.h
+	$(CC) $(CFLAGS) -c object.c
 
-%.o: %.c pes.h
-	$(CC) $(CFLAGS) -c $< -o $@
+tree.o: tree.c tree.h pes.h index.h
+	$(CC) $(CFLAGS) -c tree.c
 
-# ─── Test binaries ───────────────────────────────────────────────────────────
+index.o: index.c index.h pes.h
+	$(CC) $(CFLAGS) -c index.c
 
-test_objects: test_objects.o object.o
-	$(CC) -o $@ $^ $(LDFLAGS)
+commit.o: commit.c commit.h pes.h tree.h
+	$(CC) $(CFLAGS) -c commit.c
 
-test_tree: test_tree.o object.o tree.o
-	$(CC) -o $@ $^ $(LDFLAGS)
+pes.o: pes.c pes.h tree.h index.h commit.h
+	$(CC) $(CFLAGS) -c pes.c
 
-# ─── Convenience targets ────────────────────────────────────────────────────
-
-.PHONY: all clean test test-unit test-integration
-
-all: pes test_objects test_tree
-
+# Clean up
 clean:
-	rm -f pes test_objects test_tree $(OBJS) test_objects.o test_tree.o
-	rm -rf .pes
-
-test: test-unit test-integration
-
-test-unit: test_objects test_tree
-	@echo "=== Running Phase 1 tests ==="
+	rm -f pes *.o
+	rm -rf .pes	@echo "=== Running Phase 1 tests ==="
 	./test_objects
 	@echo ""
 	@echo "=== Running Phase 2 tests ==="

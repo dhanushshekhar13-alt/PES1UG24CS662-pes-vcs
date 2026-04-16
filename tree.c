@@ -87,30 +87,27 @@ static int compare_tree_entries(const void *a, const void *b) {
 // Caller must free(*data_out).
 // Returns 0 on success, -1 on error.
 int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
-    // Estimate max size: (6 bytes mode + 1 byte space + 256 bytes name + 1 byte null + 32 bytes hash) per entry
-    size_t max_size = tree->count * 296; 
-    uint8_t *buffer = malloc(max_size);
-    if (!buffer) return -1;
+    // We sort a temporary copy to ensure deterministic hashing.
+    Tree sorted = *tree;
+    qsort(sorted.entries, sorted.count, sizeof(TreeEntry), compare_tree_entries);
 
-    // Create a mutable copy to sort entries (Git requirement)
-    Tree sorted_tree = *tree;
-    qsort(sorted_tree.entries, sorted_tree.count, sizeof(TreeEntry), compare_tree_entries);
+    char *buf = malloc(MAX_TREE_ENTRIES * 600); 
+    if (!buf) return -1;
 
-    size_t offset = 0;
-    for (int i = 0; i < sorted_tree.count; i++) {
-        const TreeEntry *entry = &sorted_tree.entries[i];
-        
-        // Write mode and name (%o writes octal correctly for Git standards)
-        int written = sprintf((char *)buffer + offset, "%o %s", entry->mode, entry->name);
-        offset += written + 1; // +1 to step over the null terminator written by sprintf
-        
-        // Write binary hash
-        memcpy(buffer + offset, entry->hash.hash, HASH_SIZE);
-        offset += HASH_SIZE;
+    int pos = 0;
+    for (int i = 0; i < sorted.count; i++) {
+        const TreeEntry *e = &sorted.entries[i];
+        char hex[HASH_HEX_SIZE + 1];
+        hash_to_hex(&e->hash, hex);
+
+        const char *type_name = S_ISDIR(e->mode) ? "tree" : "blob";
+        // Ensure format matches the parser: mode (octal), type, hex-hash, name
+        pos += sprintf(buf + pos, "%o %s %s %s\n",
+                       e->mode, type_name, hex, e->name);
     }
 
-    *data_out = buffer;
-    *len_out = offset;
+    *data_out = buf;
+    *len_out = (size_t)pos;
     return 0;
 }
 
